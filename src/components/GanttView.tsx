@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   getTasksByPlan, addTask, deleteTask, updateTask,
-  getGroupsByPlan, addGroup, deleteGroup,
+  getGroupsByPlan, addGroup,
   getDailyRecordsForPlan, upsertDailyRecord,
   generateDateList, formatDate,
   getTotalDurationByTask, getTimeRecordsByTask,
@@ -373,22 +373,6 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
     });
   };
 
-  const confirmDeleteGroup = (id: string, name: string) => {
-    setDeleteTarget({ id, name, type: 'group' });
-    setConfirmState({
-      title: '删除分组',
-      message: `确定要删除分组「${name}」吗？分组下的任务不会被删除，会变为未分组。`,
-      destructive: true,
-      onConfirm: async () => {
-        await deleteGroup(id);
-        showToast({ text: `分组已删除`, type: 'info' });
-        setDeleteTarget(null);
-        setContextMenu(null);
-        loadData();
-      },
-    });
-  };
-
   /* ─── cell popup ─── */
   const openCellPopup = (taskId: string, date: string) => {
     const task = tasks.find((t) => t.id === taskId);
@@ -721,11 +705,6 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
                               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg>
                               <span>{group.name}</span>
                             </div>
-                            <button onClick={() => confirmDeleteGroup(group.id, group.name)}
-                              className="w-8 h-8 flex items-center justify-center rounded-lg text-indigo-400 hover:bg-indigo-100 hover:text-red-500 transition-colors"
-                              aria-label={`删除分组 ${group.name}`}>
-                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
-                            </button>
                           </td>
                         </tr>
                       )}
