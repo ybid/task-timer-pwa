@@ -80,9 +80,12 @@ export interface Settings {
   taskColWidth: number;
   /** ISO timestamp of last successful sync, or null */
   lastSync: string | null;
-  /** device id used to obtain the sync token */
-  deviceId: string | null;
-  deviceToken: string | null;
+  /** account id of the signed-in sync user */
+  accountId: string | null;
+  /** HMAC token for the sync API */
+  accountToken: string | null;
+  /** display username of the signed-in sync user */
+  username: string | null;
   syncEnabled: boolean;
 }
 

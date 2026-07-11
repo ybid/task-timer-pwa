@@ -96,8 +96,9 @@ const DEFAULT_SETTINGS: Settings = {
   customTo: '',
   taskColWidth: 160,
   lastSync: null,
-  deviceId: null,
-  deviceToken: null,
+  accountId: null,
+  accountToken: null,
+  username: null,
   syncEnabled: false,
 };
 

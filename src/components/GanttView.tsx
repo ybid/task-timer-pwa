@@ -21,7 +21,8 @@ import {
 import {
   SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, useSortable, arrayMove,
 } from '@dnd-kit/sortable';
-import { performSync, isOnline } from '../sync/client';
+import { performSync, isOnline, logout } from '../sync/client';
+import { SyncAuthModal } from './SyncAuthModal';
 
 interface GanttViewProps {
   planId: string;
@@ -186,6 +187,8 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
   const [online, setOnline] = useState(isOnline());
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState<string | null>(null);
+  const [username, setUsername] = useState<string | null>(null);
+  const [showAuth, setShowAuth] = useState(false);
 
   const { toasts, show: showToast, dismiss: dismissToast } = useToast();
 
@@ -213,6 +216,7 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
       setCustomTo(s.customTo);
       setTaskColWidth(s.taskColWidth);
       setLastSync(s.lastSync);
+      setUsername(s.username);
     })();
   }, []);
 
@@ -547,13 +551,25 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
   /* ─── sync (B5) ─── */
   const handleSync = async () => {
     if (syncing) return;
+    const s = await getSettings();
+    if (!s.username) {
+      setShowAuth(true);
+      return;
+    }
     setSyncing(true);
     const r = await performSync();
     setSyncing(false);
     setLastSync(r.lastSync);
     if (r.ok) showToast({ text: '已同步', type: 'success' });
+    else if (r.needsAuth) setShowAuth(true);
     else showToast({ text: `同步失败：${r.error}`, type: 'error' });
     loadData();
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    setUsername(null);
+    showToast({ text: '已退出登录', type: 'info' });
   };
 
   const colWidthStyle = { width: taskColWidth, minWidth: taskColWidth } as React.CSSProperties;
@@ -643,11 +659,29 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
         )}
         <div className="flex items-center gap-2 flex-shrink-0 ml-auto pl-2">
           <span className={`w-2 h-2 rounded-full ${online ? 'bg-green-500' : 'bg-gray-300'}`} title={online ? '在线' : '离线'} />
-          <button onClick={handleSync} disabled={syncing || !online}
-            className="min-h-[36px] px-3 rounded-xl bg-gray-100 text-gray-700 text-sm font-medium active:bg-gray-200 transition-colors disabled:opacity-50"
-            aria-label="立即同步">
-            {syncing ? '同步中…' : '同步'}
-          </button>
+          {username ? (
+            <>
+              <span className="text-xs text-gray-500 hidden sm:inline max-w-[88px] truncate" title={username}>{username}</span>
+              <button onClick={handleLogout}
+                className="min-h-[36px] px-2 rounded-xl text-gray-400 hover:bg-gray-100 active:bg-gray-200 transition-colors"
+                aria-label="退出登录" title="退出登录">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" />
+                </svg>
+              </button>
+              <button onClick={handleSync} disabled={syncing || !online}
+                className="min-h-[36px] px-3 rounded-xl bg-gray-100 text-gray-700 text-sm font-medium active:bg-gray-200 transition-colors disabled:opacity-50"
+                aria-label="立即同步">
+                {syncing ? '同步中…' : '同步'}
+              </button>
+            </>
+          ) : (
+            <button onClick={handleSync} disabled={!online}
+              className="min-h-[36px] px-3 rounded-xl bg-blue-50 text-blue-600 text-sm font-medium active:bg-blue-100 transition-colors disabled:opacity-50"
+              aria-label="登录并同步">
+              {syncing ? '同步中…' : '登录同步'}
+            </button>
+          )}
           {lastSync && (
             <span className="text-[11px] text-gray-400 hidden sm:inline">
               {new Date(lastSync).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
@@ -655,6 +689,16 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
           )}
         </div>
       </div>
+
+      <SyncAuthModal
+        open={showAuth}
+        onClose={() => setShowAuth(false)}
+        onSuccess={async () => {
+          const s = await getSettings();
+          setUsername(s.username);
+          await handleSync();
+        }}
+      />
 
       {/* ─── Table ─── */}
       <div className="flex-1 overflow-hidden relative">

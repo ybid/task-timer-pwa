@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { KV } from './kv';
-import { signDevice, verifyToken } from './auth';
+import { signAccount, verifyAccount, registerAccount, loginAccount } from './auth';
 import { applyChanges, getChangesSince, SyncChange } from './store';
 
 export interface Bindings {
@@ -51,41 +51,58 @@ export function buildApp(): Hono<{ Bindings: Bindings }> {
     await next();
   });
 
-  // POST /api/auth/device  ->  { token }
-  app.post('/api/auth/device', async (c) => {
+  // POST /api/auth/register  ->  { token, accountId }
+  app.post('/api/auth/register', async (c) => {
     const body = await c.req
-      .json<{ deviceId?: string }>()
-      .catch(() => ({ deviceId: undefined as string | undefined }));
-    const deviceId = body.deviceId;
-    if (!deviceId || typeof deviceId !== 'string') {
-      return c.json({ error: 'deviceId required' }, 400);
-    }
-    const token = await signDevice(deviceId, secretOf(c));
-    return c.json({ token });
+      .json<{ username?: string; password?: string }>()
+      .catch(() => ({ username: undefined, password: undefined }));
+    const res = await registerAccount(
+      c.env.KV as KV,
+      body.username ?? '',
+      body.password ?? '',
+      secretOf(c),
+    );
+    if (!res.ok) return c.json({ error: res.error }, res.status);
+    return c.json({ token: res.token, accountId: res.accountId });
+  });
+
+  // POST /api/auth/login  ->  { token, accountId }
+  app.post('/api/auth/login', async (c) => {
+    const body = await c.req
+      .json<{ username?: string; password?: string }>()
+      .catch(() => ({ username: undefined, password: undefined }));
+    const res = await loginAccount(
+      c.env.KV as KV,
+      body.username ?? '',
+      body.password ?? '',
+      secretOf(c),
+    );
+    if (!res.ok) return c.json({ error: res.error }, res.status);
+    return c.json({ token: res.token, accountId: res.accountId });
   });
 
   // POST /api/sync  ->  { now }
   app.post('/api/sync', async (c) => {
     const token = bearer(c);
-    const deviceId = await verifyToken(token, secretOf(c));
-    if (!deviceId) return c.json({ error: 'unauthorized' }, 401);
+    const accountId = await verifyAccount(token, secretOf(c));
+    if (!accountId) return c.json({ error: 'unauthorized' }, 401);
 
     const body = await c.req
       .json<{ changes?: SyncChange[] }>()
       .catch(() => ({ changes: [] as SyncChange[] }));
     const changes = Array.isArray(body.changes) ? body.changes : [];
-    await applyChanges(c.env.KV as KV, deviceId, changes);
+    await applyChanges(c.env.KV as KV, accountId, changes);
     return c.json({ now: new Date().toISOString() });
   });
 
   // GET /api/sync?since=<iso>  ->  { changes, now }
   app.get('/api/sync', async (c) => {
     const token = bearer(c);
-    const deviceId = await verifyToken(token, secretOf(c));
-    if (!deviceId) return c.json({ error: 'unauthorized' }, 401);
+    const accountId = await verifyAccount(token, secretOf(c));
+    if (!accountId) return c.json({ error: 'unauthorized' }, 401);
 
     const since = c.req.query('since') || null;
-    const changes = await getChangesSince(c.env.KV as KV, deviceId, since);
+    const changes = await getChangesSince(c.env.KV as KV, accountId, since);
     return c.json({ changes, now: new Date().toISOString() });
   });
 
