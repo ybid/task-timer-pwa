@@ -1,0 +1,11 @@
+name = "task-timer-sync"
+main = "src/worker.ts"
+compatibility_date = "2024-09-23"
+
+# NOTE: SYNC_SECRET is provided ONLY as a Cloudflare secret (scripts/deploy.mjs
+# runs `wrangler secret put SYNC_SECRET`). Do NOT add it under [vars] here —
+# Cloudflare rejects a secret and a [vars] entry sharing the same name (code 10053).
+
+[[kv_namespaces]]
+binding = "KV"
+id = "1018d06e9ef14ca18eccb18663ad5b02"

@@ -1,0 +1,24 @@
+{
+  "name": "task-timer-pwa-sync",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Lightweight cloud-sync backend (Hono) for task-timer-pwa",
+  "scripts": {
+    "dev": "tsx watch src/dev.ts",
+    "start": "tsx src/dev.ts",
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy",
+    "deploy:setup": "node scripts/deploy.mjs"
+  },
+  "dependencies": {
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "@hono/node-server": "^1.13.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "wrangler": "^3.80.0"
+  }
+}
