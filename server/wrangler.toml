@@ -9,3 +9,4 @@ compatibility_date = "2024-09-23"
 [[kv_namespaces]]
 binding = "KV"
 id = "1018d06e9ef14ca18eccb18663ad5b02"
+account_id = "97e80f20ac5ade1dd2a8011e68f5d64c"

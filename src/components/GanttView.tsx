@@ -77,7 +77,7 @@ const SortableTaskRow: React.FC<RowProps> = ({
   return (
     <tr ref={setNodeRef} className="border-b border-gray-100/80 group" style={{ opacity: isDragging ? 0.4 : 1 }}>
       {/* Task name + drag handle + more */}
-      <td className="sticky left-0 z-[3] bg-white px-3 py-2.5 border-r border-gray-100 group-hover:bg-blue-50/20 transition-colors"
+      <td className="sticky left-0 z-[3] bg-white px-3 py-1.5 border-r border-gray-100 group-hover:bg-blue-50/20 transition-colors"
         style={colWidthStyle}>
         <div className="flex items-center gap-1">
           <button
@@ -88,7 +88,7 @@ const SortableTaskRow: React.FC<RowProps> = ({
             onPointerDown={(e) => { (listeners as any)?.onPointerDown?.(e); onLongPress(e); }}
             onPointerUp={onClearLongPress}
             onPointerCancel={onClearLongPress}
-            className="flex-1 text-left min-h-[44px] flex items-center touch-none"
+            className="flex-1 text-left min-h-[36px] flex items-center touch-none"
             aria-label={`编辑任务 ${task.name}（可拖动排序）`}
           >
             <span className="text-sm font-medium text-gray-800">{task.name}</span>
@@ -101,7 +101,7 @@ const SortableTaskRow: React.FC<RowProps> = ({
         </div>
       </td>
       {/* Progress - sticky left */}
-      <td className="sticky z-[3] bg-white px-2 py-2.5 text-center border-r border-gray-100 group-hover:bg-blue-50/20 transition-colors"
+      <td className="sticky z-[3] bg-white px-2 py-1.5 text-center border-r border-gray-100 group-hover:bg-blue-50/20 transition-colors"
         style={cellStyle}>
         <div className="flex flex-col items-center gap-0.5">
           <span className="text-xs font-mono font-semibold text-gray-700">
@@ -125,8 +125,8 @@ const SortableTaskRow: React.FC<RowProps> = ({
             aria-label={`${task.name} ${d} 已完成 ${val ?? 0}`}
             onClick={() => onCellClick(d)}
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onCellClick(d); } }}
-            className={`text-center px-1 py-2 cursor-pointer transition-all active:scale-95 touch-manipulation min-w-[56px] min-h-[44px] ${isToday ? 'ring-1 ring-inset ring-blue-200' : ''}`}>
-            <div className={`w-full min-h-[36px] flex items-center justify-center rounded-lg ${heatClass(val ?? 0, task.targetCount)} transition-colors`}>
+            className={`text-center px-1 py-1.5 cursor-pointer transition-all active:scale-95 touch-manipulation min-w-[56px] min-h-[36px] ${isToday ? 'ring-1 ring-inset ring-blue-200' : ''}`}>
+            <div className={`w-full min-h-[30px] flex items-center justify-center rounded-lg ${heatClass(val ?? 0, task.targetCount)} transition-colors`}>
               <span className={`text-xs font-mono ${val !== null && val > 0 ? 'text-gray-800 font-medium' : 'text-gray-400'}`}>
                 {val !== null ? val : '-'}
               </span>
