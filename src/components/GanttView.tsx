@@ -23,6 +23,7 @@ import {
 } from '@dnd-kit/sortable';
 import { performSync, isOnline, logout } from '../sync/client';
 import { SyncAuthModal } from './SyncAuthModal';
+import { HaoxueModule } from '../haoxue';
 
 interface GanttViewProps {
   planId: string;
@@ -189,6 +190,9 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
   const [lastSync, setLastSync] = useState<string | null>(null);
   const [username, setUsername] = useState<string | null>(null);
   const [showAuth, setShowAuth] = useState(false);
+  const [subFeatureOpen, setSubFeatureOpen] = useState(false);
+  const [pendingHaoxue, setPendingHaoxue] = useState(false);
+  const [loaded, setLoaded] = useState(false);
 
   const { toasts, show: showToast, dismiss: dismissToast } = useToast();
 
@@ -217,6 +221,7 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
       setTaskColWidth(s.taskColWidth);
       setLastSync(s.lastSync);
       setUsername(s.username);
+      setLoaded(true);
     })();
   }, []);
 
@@ -572,10 +577,51 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
     showToast({ text: '已退出登录', type: 'info' });
   };
 
+  /* 口算训练入口：未登录先弹登录框，登录成功后自动打开 */
+  const openHaoxue = () => {
+    if (username) {
+      setSubFeatureOpen(true);
+    } else {
+      setPendingHaoxue(true);
+      setShowAuth(true);
+    }
+  };
+
+  /* 切换账号：退出当前账号并重新登录（口算与任务共用同一账号） */
+  const handleSwitchAccount = async () => {
+    setSubFeatureOpen(false);
+    await logout();
+    setUsername(null);
+    setShowAuth(true);
+  };
+
   const colWidthStyle = { width: taskColWidth, minWidth: taskColWidth } as React.CSSProperties;
   const cellStyle = { left: taskColWidth } as React.CSSProperties;
 
   return (
+    <>
+      {!loaded ? (
+        <div className="flex flex-col h-[100dvh] bg-gray-50 items-center justify-center">
+          <div className="text-sm text-gray-400">加载中…</div>
+        </div>
+      ) : !username ? (
+        /* ─── 登录门禁：未登录不显示任务列表 ─── */
+        <div className="flex flex-col h-[100dvh] bg-gray-50 items-center justify-center px-6"
+          style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}>
+          <div className="w-full max-w-sm bg-white rounded-3xl p-7 shadow-sm border border-gray-100 text-center">
+            <div className="text-4xl mb-3">📋</div>
+            <div className="text-heading font-semibold text-gray-800">计划甘特表</div>
+            <div className="text-sm text-gray-400 mt-1 mb-6">请先登录以查看与管理你的任务</div>
+            <button
+              onClick={() => setShowAuth(true)}
+              className="w-full min-h-[52px] rounded-2xl bg-blue-600 text-white text-base font-semibold active:bg-blue-700 transition-colors shadow-lg shadow-blue-600/20"
+            >
+              登录同步
+            </button>
+            <div className="text-[11px] text-gray-300 mt-3">登录后即可在本地与云端同步数据</div>
+          </div>
+        </div>
+      ) : (
     <div className="flex flex-col h-[100dvh] bg-gray-50"
       style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}>
       {/* ─── Header ─── */}
@@ -630,6 +676,11 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
           className="flex items-center justify-center w-9 h-9 rounded-xl text-blue-600 hover:bg-blue-50 active:bg-blue-100 transition-colors"
           aria-label="添加任务">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+        </button>
+        <button onClick={openHaoxue}
+          className="flex items-center justify-center w-9 h-9 rounded-xl text-blue-600 hover:bg-blue-50 active:bg-blue-100 transition-colors text-lg"
+          aria-label="口算训练">
+          🧮
         </button>
       </div>
 
@@ -689,16 +740,6 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
           )}
         </div>
       </div>
-
-      <SyncAuthModal
-        open={showAuth}
-        onClose={() => setShowAuth(false)}
-        onSuccess={async () => {
-          const s = await getSettings();
-          setUsername(s.username);
-          await handleSync();
-        }}
-      />
 
       {/* ─── Table ─── */}
       <div className="flex-1 overflow-hidden relative">
@@ -999,6 +1040,33 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
         />
       )}
     </div>
+      )}
+
+      <SyncAuthModal
+        open={showAuth}
+        onClose={() => {
+          setShowAuth(false);
+          if (!username) setPendingHaoxue(false);
+        }}
+        onSuccess={async () => {
+          const s = await getSettings();
+          setUsername(s.username);
+          await handleSync();
+          if (pendingHaoxue) {
+            setPendingHaoxue(false);
+            setSubFeatureOpen(true);
+          }
+        }}
+      />
+
+      {subFeatureOpen && (
+        <HaoxueModule
+          username={username}
+          onClose={() => setSubFeatureOpen(false)}
+          onSwitchAccount={handleSwitchAccount}
+        />
+      )}
+    </>
   );
 };
 
