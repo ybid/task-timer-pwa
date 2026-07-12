@@ -3,42 +3,101 @@ import { addTimeRecord, getTimeRecordsByTask, saveTimerDraft, clearTimerDraft, f
 import { TimeRecord } from '../types';
 import { uuid } from '../utils/uuid';
 
+interface ResumeState {
+  originStart: string;
+  accumulated: number;
+  segmentStart: string | null;
+}
+
 interface TimerProps {
   taskId: string;
   taskName: string;
   date: string;
-  /** ISO start time to resume from (skips the countdown). */
-  initialStartTime?: string;
+  /** Resume state restored from a saved draft. Omit for a fresh timer. */
+  resume?: ResumeState;
   onClose: () => void;
   onEnd?: (taskId: string, startTime: Date, endTime: Date) => void;
+}
+
+interface WakeLockLike {
+  release(): Promise<void>;
 }
 
 export const Timer: React.FC<TimerProps> = ({
   taskId,
   taskName,
   date,
-  initialStartTime,
+  resume,
   onClose,
   onEnd,
 }) => {
-  const [isRunning, setIsRunning] = useState(Boolean(initialStartTime));
-  const [startTime, setStartTime] = useState<Date | null>(initialStartTime ? new Date(initialStartTime) : null);
-  const [elapsed, setElapsed] = useState(0);
+  const [isRunning, setIsRunning] = useState(() => !!resume && resume.segmentStart !== null);
+  const [originStart, setOriginStart] = useState<Date | null>(() => (resume ? new Date(resume.originStart) : null));
+  const [accumulated, setAccumulated] = useState(() => (resume ? resume.accumulated : 0));
+  // On resume of a running draft, reset the segment start to "now" so the closed gap isn't counted.
+  const [segmentStart, setSegmentStart] = useState<number | null>(() =>
+    resume && resume.segmentStart !== null ? Date.now() : null
+  );
+  const [elapsed, setElapsed] = useState(() => (resume ? Math.floor(resume.accumulated) : 0));
   const [todayTotal, setTodayTotal] = useState(0);
   const [weekTotal, setWeekTotal] = useState(0);
   const [countdown, setCountdown] = useState(3);
-  const [showCountdown, setShowCountdown] = useState(!initialStartTime);
+  const [showCountdown, setShowCountdown] = useState(() => !resume);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const startTimeRef = useRef<Date | null>(startTime);
-  startTimeRef.current = startTime;
+
+  // Mirror mutable state into refs so the 1s tick always reads fresh values.
+  const accumulatedRef = useRef(accumulated);
+  accumulatedRef.current = accumulated;
+  const segmentStartRef = useRef(segmentStart);
+  segmentStartRef.current = segmentStart;
+  const originStartRef = useRef(originStart);
+  originStartRef.current = originStart;
+  const wakeLockRef = useRef<WakeLockLike | null>(null);
+
+  /* ─── Persist an in-progress timer so a refresh / close can resume it ─── */
+  const persistDraft = () => {
+    const st = originStartRef.current;
+    if (!st) return;
+    const seg = segmentStartRef.current;
+    saveTimerDraft({
+      id: 'current',
+      taskId,
+      taskName,
+      date,
+      originStart: st.toISOString(),
+      accumulated: accumulatedRef.current,
+      segmentStart: seg !== null ? new Date(seg).toISOString() : null,
+      updatedAt: new Date().toISOString(),
+    });
+  };
+
+  /* ─── Wake Lock: keep screen on while running, release on pause/close ─── */
+  const requestWakeLock = async () => {
+    try {
+      const nav = navigator as Navigator & { wakeLock?: { request: (type: 'screen') => Promise<WakeLockLike> } };
+      wakeLockRef.current = nav.wakeLock ? await nav.wakeLock.request('screen') : null;
+    } catch {
+      wakeLockRef.current = null; // unsupported or denied — degrade silently
+    }
+  };
+  const releaseWakeLock = async () => {
+    try {
+      await wakeLockRef.current?.release();
+    } catch {
+      /* ignore */
+    }
+    wakeLockRef.current = null;
+  };
 
   /* Countdown 3-2-1 */
   useEffect(() => {
     if (!showCountdown) return;
     if (countdown <= 0) {
       const start = new Date();
-      setStartTime(start);
+      setOriginStart(start);
+      setSegmentStart(Date.now());
+      setAccumulated(0);
       setIsRunning(true);
       setShowCountdown(false);
       return;
@@ -47,49 +106,51 @@ export const Timer: React.FC<TimerProps> = ({
     return () => clearTimeout(t);
   }, [countdown, showCountdown]);
 
+  /* Tick: elapsed = accumulated + (current running segment) */
   useEffect(() => {
-    if (!isRunning || !startTime) return;
-    intervalRef.current = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startTime.getTime()) / 1000));
-    }, 1000);
+    if (!isRunning) return;
+    const tick = () => {
+      const seg = segmentStartRef.current;
+      const add = seg !== null ? (Date.now() - seg) / 1000 : 0;
+      setElapsed(Math.floor(accumulatedRef.current + add));
+    };
+    tick();
+    intervalRef.current = setInterval(tick, 1000);
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [isRunning, startTime]);
+  }, [isRunning]);
 
-  /* Persist an in-progress timer so a refresh / close can resume it. */
-  const persistDraft = () => {
-    const st = startTimeRef.current;
-    if (!st) return;
-    saveTimerDraft({
-      id: 'current',
-      taskId,
-      taskName,
-      date,
-      startTime: st.toISOString(),
-      elapsed: 0,
-      updatedAt: new Date().toISOString(),
-    });
-  };
-
+  /* While running: persist draft + keep screen awake; release on pause/close,
+     re-acquire the lock when returning to the foreground. */
   useEffect(() => {
-    if (!isRunning || !startTime) return;
+    if (!isRunning) {
+      releaseWakeLock();
+      return;
+    }
+    requestWakeLock();
     const id = setInterval(persistDraft, 5000);
-    const onHide = () => {
-      if (document.visibilityState === 'hidden') persistDraft();
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        persistDraft();
+        releaseWakeLock();
+      } else {
+        requestWakeLock();
+      }
     };
     const onBeforeUnload = () => persistDraft();
-    document.addEventListener('visibilitychange', onHide);
+    document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => {
       clearInterval(id);
-      document.removeEventListener('visibilitychange', onHide);
+      document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('beforeunload', onBeforeUnload);
+      releaseWakeLock();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isRunning, startTime]);
+  }, [isRunning]);
 
-  /* Load stats — scoped to today and this week (C7 fix) */
+  /* Load stats — scoped to today and this week */
   useEffect(() => {
     (async () => {
       const all = await getTimeRecordsByTask(taskId);
@@ -112,53 +173,59 @@ export const Timer: React.FC<TimerProps> = ({
 
   /* ─── controls ─── */
   const handlePause = () => {
-    persistDraft();
+    const seg = segmentStartRef.current;
+    if (seg !== null) {
+      setAccumulated((a) => a + (Date.now() - seg) / 1000);
+    }
+    setSegmentStart(null);
     setIsRunning(false);
     if (intervalRef.current) clearInterval(intervalRef.current);
+    persistDraft();
   };
 
   const handleResume = () => {
-    if (!startTime) return;
     setIsRunning(true);
+    setSegmentStart(Date.now());
   };
 
   const finish = async () => {
     if (intervalRef.current) clearInterval(intervalRef.current);
-    const st = startTimeRef.current;
-    if (st) {
-      const end = new Date();
-      const dur = Math.floor((Date.now() - st.getTime()) / 1000);
-      setElapsed(dur);
-      const record: Omit<TimeRecord, 'updatedAt' | 'deletedAt'> = {
-        id: uuid(),
-        taskId,
-        startTime: st.toISOString(),
-        endTime: end.toISOString(),
-        duration: dur,
-        date: end.toISOString().split('T')[0],
-      };
-      await addTimeRecord(record);
-      try {
-        navigator.vibrate?.(200);
-      } catch {
-        /* ignore */
-      }
-      if (onEnd) await onEnd(taskId, st, end);
+    const seg = segmentStartRef.current;
+    const dur = Math.round(accumulatedRef.current + (seg !== null ? (Date.now() - seg) / 1000 : 0));
+    const st = originStartRef.current ?? new Date();
+    const end = new Date();
+    const record: Omit<TimeRecord, 'updatedAt' | 'deletedAt'> = {
+      id: uuid(),
+      taskId,
+      startTime: st.toISOString(),
+      endTime: end.toISOString(),
+      duration: dur,
+      date: end.toISOString().split('T')[0],
+    };
+    await addTimeRecord(record);
+    try {
+      navigator.vibrate?.(200);
+    } catch {
+      /* ignore */
     }
+    if (onEnd) await onEnd(taskId, st, end);
     await clearTimerDraft();
+    await releaseWakeLock();
     onClose();
   };
 
   const handleCancel = async () => {
     if (intervalRef.current) clearInterval(intervalRef.current);
     await clearTimerDraft();
+    await releaseWakeLock();
     onClose();
   };
 
   const fmt = (s: number) => {
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
+    const total = Math.max(0, Math.floor(s));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const sec = total % 60;
     return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
   };
 

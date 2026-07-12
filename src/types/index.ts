@@ -66,10 +66,12 @@ export interface TimerDraft {
   taskId: string;
   taskName: string;
   date: string;
-  /** ISO time the timer actually started */
-  startTime: string;
-  /** seconds counted before this draft was written (for resume math) */
-  elapsed: number;
+  /** ISO time the timer originally started (for stats attribution) */
+  originStart: string;
+  /** seconds already counted, excluding the current running segment */
+  accumulated: number;
+  /** ISO start of the current running segment, or null if paused */
+  segmentStart: string | null;
   updatedAt: string;
 }
 

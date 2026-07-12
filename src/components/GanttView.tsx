@@ -172,7 +172,7 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
   const [editTaskGroupText, setEditTaskGroupText] = useState('');
 
   const [fullscreenTimer, setFullscreenTimer] = useState<{ taskId: string; taskName: string; date: string } | null>(null);
-  const [resumeStart, setResumeStart] = useState<string | null>(null);
+  const [resume, setResume] = useState<{ originStart: string; accumulated: number; segmentStart: string | null } | null>(null);
   const [todaySessions, setTodaySessions] = useState(0);
   const [todayDuration, setTodayDuration] = useState(0);
   const [todayTimeRecords, setTodayTimeRecords] = useState<TimeRecord[]>([]);
@@ -289,11 +289,13 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
       if (age > 12 * 60 * 60 * 1000) { await clearTimerDraft(); return; }
       const planTasks = await getTasksByPlan(planId);
       if (!planTasks.find((t) => t.id === draft.taskId)) { await clearTimerDraft(); return; }
+      // Old draft schema (pre segmentStart model) — discard and start fresh next time.
+      if (!draft.originStart) { await clearTimerDraft(); return; }
       setConfirmState({
         title: '继续计时',
         message: `检测到「${draft.taskName}」有一个进行中的计时，是否继续？`,
         onConfirm: () => {
-          setResumeStart(draft.startTime);
+          setResume({ originStart: draft.originStart, accumulated: draft.accumulated, segmentStart: draft.segmentStart });
           setFullscreenTimer({ taskId: draft.taskId, taskName: draft.taskName, date: draft.date });
           setConfirmState(null);
         },
@@ -480,7 +482,7 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
 
   /* ─── fullscreen timer ─── */
   const launchTimer = (taskId: string, taskName: string, date: string) => {
-    setResumeStart(null);
+    setResume(null);
     setFullscreenTimer({ taskId, taskName, date });
   };
 
@@ -1092,7 +1094,7 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
           taskId={fullscreenTimer.taskId}
           taskName={fullscreenTimer.taskName}
           date={fullscreenTimer.date}
-          initialStartTime={resumeStart ?? undefined}
+          resume={resume ?? undefined}
           onClose={handleTimerClose}
           onEnd={handleTimerEnd}
         />
