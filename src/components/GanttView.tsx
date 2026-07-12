@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import {
   getTasksByPlan, addTask, deleteTask, updateTask,
   getGroupsByPlan, addGroup,
-  getDailyRecordsForPlan, upsertDailyRecord,
+  getDailyRecordsForPlan, upsertDailyRecord, deleteDailyRecord,
   generateDateList, formatDate,
   getTotalDurationByTask, getTimeRecordsByTask,
   addPlan, deletePlan,
@@ -165,7 +165,7 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
   const planRef = useRef<HTMLDivElement>(null);
 
   const [cellPopup, setCellPopup] = useState<{
-    taskId: string; taskName: string; date: string; completedCount: number; note: string;
+    taskId: string; taskName: string; date: string; completedCount: number | null; note: string;
   } | null>(null);
 
   const [editTask, setEditTask] = useState<{ id: string; name: string; targetCount: number; groupId: string | null; progressMode?: 'cumulative' | 'absolute' } | null>(null);
@@ -381,7 +381,7 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
     const groupId = await resolveGroup(newTaskGroupText);
     await addTask({
       id: uuid(), planId, groupId,
-      name: newTaskName.trim(), targetCount: Math.max(1, newTaskTarget || 1),
+      name: newTaskName.trim(), targetCount: Math.max(0, newTaskTarget || 0),
       completedCount: 0, progressMode: newTaskMode, sortOrder: tasks.length, createdAt: new Date().toISOString(),
     });
     setNewTaskName(''); setNewTaskTarget(0); setNewTaskGroupText(''); setNewTaskMode('cumulative');
@@ -419,9 +419,12 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
       const yesterdayRec = dailyRecords.find((r) => r.taskId === taskId && r.date === yesterdayStr);
       if (yesterdayRec?.note) note = yesterdayRec.note;
     }
+    // 默认填充：有记录则回填；累加型无记录默认 1，位置型无记录默认空（无任何值）
+    const mode = task.progressMode ?? 'cumulative';
+    const defaultCount = existing ? existing.completedCount : mode === 'absolute' ? null : 1;
     setCellPopup({
       taskId, taskName: task.name, date,
-      completedCount: existing?.completedCount ?? 0, note,
+      completedCount: defaultCount, note,
     });
     loadTodayTimerStats(taskId, date);
   };
@@ -438,6 +441,17 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
 
   const saveCellPopup = async () => {
     if (!cellPopup) return;
+    // 位置型未填（空）→ 视为"没有任何值"，删除当天记录而非写入 0
+    if (cellPopup.completedCount === null) {
+      const existing = dailyRecords.find((r) => r.taskId === cellPopup.taskId && r.date === cellPopup.date);
+      if (existing) {
+        await deleteDailyRecord(existing.id);
+        setDailyRecords((prev) => prev.filter((r) => r.id !== existing.id));
+        setAllDailyRecords((prev) => prev.filter((r) => r.id !== existing.id));
+      }
+      setCellPopup(null);
+      return;
+    }
     const record = {
       id: uuid(), taskId: cellPopup.taskId, date: cellPopup.date,
       completedCount: cellPopup.completedCount, note: cellPopup.note || undefined,
@@ -465,7 +479,7 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
     await updateTask({
       ...original,
       name: editTask.name.trim(),
-      targetCount: Math.max(1, editTask.targetCount || 1),
+      targetCount: Math.max(0, editTask.targetCount || 0),
       progressMode: editTask.progressMode ?? 'cumulative',
       groupId,
     });
@@ -489,7 +503,13 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
   const handleTimerEnd = async (taskId: string, _startTime: Date, _endTime: Date) => {
     if (!fullscreenTimer) return;
     loadTodayTimerStats(taskId, fullscreenTimer.date);
-    setCellPopup((prev) => (prev ? { ...prev, completedCount: prev.completedCount + 1 } : null));
+    const mode = tasks.find((t) => t.id === taskId)?.progressMode ?? 'cumulative';
+    // 累加型：计时完成自动 +1 今日完成；位置型：计时不影响"位置"值，保持不变
+    setCellPopup((prev) => {
+      if (!prev) return null;
+      if (mode === 'absolute') return prev;
+      return { ...prev, completedCount: (prev.completedCount ?? 0) + 1 };
+    });
     showToast({ text: `计时完成`, type: 'success' });
   };
 
@@ -892,9 +912,9 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
           </div>
           <div className="flex gap-2">
             <div className="flex-1 flex flex-col gap-1">
-              <label className="text-xs text-gray-400" htmlFor="new-task-target">目标数</label>
-              <input id="new-task-target" type="number" min={1} value={newTaskTarget || ''} onChange={(e) => setNewTaskTarget(Number(e.target.value))}
-                placeholder="目标数" className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:bg-white focus:border-blue-400 outline-none transition-all" />
+              <label className="text-xs text-gray-400" htmlFor="new-task-target">目标数（可留空=不限）</label>
+              <input id="new-task-target" type="number" min={0} value={newTaskTarget || ''} onChange={(e) => setNewTaskTarget(Number(e.target.value))}
+                placeholder="可留空" className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:bg-white focus:border-blue-400 outline-none transition-all" />
             </div>
             <div className="flex-1 flex flex-col gap-1">
               <label className="text-xs text-gray-400" htmlFor="new-task-group">分组</label>
@@ -942,18 +962,18 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
               </button>
             </div>
             <div className="flex items-center gap-3 mb-3">
-              <button onClick={() => setCellPopup((prev) => prev ? { ...prev, completedCount: Math.max(0, prev.completedCount - 1) } : null)}
+              <button onClick={() => setCellPopup((prev) => prev ? { ...prev, completedCount: Math.max(0, (prev.completedCount ?? 0) - 1) } : null)}
                 className="w-11 h-11 flex items-center justify-center rounded-xl bg-gray-100 text-gray-600 text-lg font-semibold active:bg-gray-200 transition-colors" aria-label="减少">−</button>
               <div className="flex-1 text-center">
-                <input type="number" min={0} value={cellPopup.completedCount}
-                  onChange={(e) => setCellPopup((prev) => prev ? { ...prev, completedCount: Math.max(0, Number(e.target.value)) } : null)}
+                <input type="number" min={0} value={cellPopup.completedCount ?? ''}
+                  onChange={(e) => setCellPopup((prev) => prev ? { ...prev, completedCount: e.target.value === '' ? null : Math.max(0, Number(e.target.value)) } : null)}
                   className="w-20 text-center text-2xl font-bold text-gray-900 bg-transparent border-b-2 border-blue-500 outline-none mx-auto"
                   inputMode="numeric" aria-label={popupMode === 'absolute' ? '当前位置' : '今日完成量'} />
                 <div className="text-[11px] text-gray-400 mt-1">
                   {popupMode === 'absolute' ? '当前位置（看到第几）' : '今日完成'}
                 </div>
               </div>
-              <button onClick={() => setCellPopup((prev) => prev ? { ...prev, completedCount: prev.completedCount + 1 } : null)}
+              <button onClick={() => setCellPopup((prev) => prev ? { ...prev, completedCount: (prev.completedCount ?? 0) + 1 } : null)}
                 className="w-11 h-11 flex items-center justify-center rounded-xl bg-gray-100 text-gray-600 text-lg font-semibold active:bg-gray-200 transition-colors" aria-label="增加">+</button>
             </div>
             <input type="text" value={cellPopup.note}
@@ -1018,10 +1038,10 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
             </div>
             <div className="flex gap-2">
               <div className="flex-1 flex flex-col gap-1">
-                <label className="text-xs text-gray-400" htmlFor="edit-target">目标数</label>
-                <input id="edit-target" type="number" min={1} value={editTask.targetCount || ''}
+                <label className="text-xs text-gray-400" htmlFor="edit-target">目标数（可留空=不限）</label>
+                <input id="edit-target" type="number" min={0} value={editTask.targetCount || ''}
                   onChange={(e) => setEditTask((prev) => prev ? { ...prev, targetCount: Number(e.target.value) } : null)}
-                  className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:bg-white focus:border-blue-400 outline-none transition-all" />
+                  placeholder="可留空" className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:bg-white focus:border-blue-400 outline-none transition-all" />
               </div>
               <div className="flex-1 flex flex-col gap-1">
                 <label className="text-xs text-gray-400" htmlFor="edit-group">分组</label>
