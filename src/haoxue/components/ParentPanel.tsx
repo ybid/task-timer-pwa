@@ -89,19 +89,41 @@ export function ParentPanel({ entities, onStartLevel, onBack }: Props) {
     let alive = true;
     (async () => {
       const plans = await getPlans();
-      let tasks = 0;
-      for (const p of plans) tasks += (await getTasksByPlan(p.id)).length;
+      let taskCount = 0;
+      // 收集每任务的进度方式，供汇总时区分（位置型取最远到达、累加型求和）
+      const taskMode = new Map<string, 'cumulative' | 'absolute'>();
+      for (const p of plans) {
+        const ts = await getTasksByPlan(p.id);
+        taskCount += ts.length;
+        for (const t of ts) taskMode.set(t.id, t.progressMode ?? 'cumulative');
+      }
       const today = formatDate(Date.now());
       const recs = await getDailyRecordsByDateRange('2000-01-01', today);
+      // 按任务分组，分别按模式汇总
+      const byTask = new Map<string, typeof recs>();
+      for (const r of recs) {
+        if (!byTask.has(r.taskId)) byTask.set(r.taskId, []);
+        byTask.get(r.taskId)!.push(r);
+      }
       let completions = 0;
       let todayCompletions = 0;
-      for (const r of recs) {
-        completions += r.completedCount ?? 0;
-        if (r.date === today) todayCompletions += r.completedCount ?? 0;
+      for (const [taskId, list] of byTask) {
+        const mode = taskMode.get(taskId) ?? 'cumulative';
+        if (mode === 'absolute') {
+          // 位置型：累计完成=最远到达值；今日完成=今日记录的位置（无则 0）
+          completions += list.reduce((m, r) => Math.max(m, r.completedCount ?? 0), 0);
+          const tr = list.find((r) => r.date === today);
+          todayCompletions += tr ? (tr.completedCount ?? 0) : 0;
+        } else {
+          for (const r of list) {
+            completions += r.completedCount ?? 0;
+            if (r.date === today) todayCompletions += r.completedCount ?? 0;
+          }
+        }
       }
       const timeRecs = await getTimeRecordsByDate(today);
       const todayMs = timeRecs.reduce((s, r) => s + (r.duration ?? 0), 0);
-      if (alive) setMain({ plans: plans.length, tasks, completions, todayCompletions, todayMs });
+      if (alive) setMain({ plans: plans.length, tasks: taskCount, completions, todayCompletions, todayMs });
     })();
     return () => {
       alive = false;

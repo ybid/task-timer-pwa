@@ -145,6 +145,8 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
   const [tasks, setTasks] = useState<Task[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [dailyRecords, setDailyRecords] = useState<DailyRecord[]>([]);
+  /** 全量每日记录（不限日期范围），用于任务总进度汇总（位置型取最远到达、累加型求和都需全量） */
+  const [allDailyRecords, setAllDailyRecords] = useState<DailyRecord[]>([]);
   const [datePreset, setDatePreset] = useState<DateRangePreset>(7);
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
@@ -156,6 +158,7 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
   const [newTaskName, setNewTaskName] = useState('');
   const [newTaskTarget, setNewTaskTarget] = useState(0);
   const [newTaskGroupText, setNewTaskGroupText] = useState('');
+  const [newTaskMode, setNewTaskMode] = useState<'cumulative' | 'absolute'>('cumulative');
 
   const [showPlanDropdown, setShowPlanDropdown] = useState(false);
   const [newPlanName, setNewPlanName] = useState('');
@@ -165,7 +168,7 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
     taskId: string; taskName: string; date: string; completedCount: number; note: string;
   } | null>(null);
 
-  const [editTask, setEditTask] = useState<{ id: string; name: string; targetCount: number; groupId: string | null } | null>(null);
+  const [editTask, setEditTask] = useState<{ id: string; name: string; targetCount: number; groupId: string | null; progressMode?: 'cumulative' | 'absolute' } | null>(null);
   const [editTaskGroupText, setEditTaskGroupText] = useState('');
 
   const [fullscreenTimer, setFullscreenTimer] = useState<{ taskId: string; taskName: string; date: string } | null>(null);
@@ -201,16 +204,32 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
   const planName = currentPlan?.name ?? '';
 
   /* derived cell data (C4/C10 helpers) */
+  // 任务汇总方式 → 每任务取对应算法；默认累加（兼容老数据）
+  const modeOf = (taskId: string): 'cumulative' | 'absolute' =>
+    tasks.find((t) => t.id === taskId)?.progressMode ?? 'cumulative';
   const totalByTask = useMemo(() => {
     const m = new Map<string, number>();
-    for (const r of dailyRecords) m.set(r.taskId, (m.get(r.taskId) ?? 0) + r.completedCount);
+    for (const r of allDailyRecords) {
+      const id = r.taskId;
+      const v = r.completedCount;
+      if (modeOf(id) === 'absolute') {
+        // 位置型：取最远到达值
+        m.set(id, Math.max(m.get(id) ?? 0, v));
+      } else {
+        // 累加型：求和
+        m.set(id, (m.get(id) ?? 0) + v);
+      }
+    }
     return m;
-  }, [dailyRecords]);
+  }, [allDailyRecords, tasks]);
   const cellMap = useMemo(() => {
     const m = new Map<string, number>();
     for (const r of dailyRecords) m.set(`${r.taskId}@${r.date}`, r.completedCount);
     return m;
   }, [dailyRecords]);
+  // 当前打开的每日单元格所属任务的进度方式（用于输入框文案自适应）
+  const popupMode: 'cumulative' | 'absolute' =
+    cellPopup ? (tasks.find((t) => t.id === cellPopup.taskId)?.progressMode ?? 'cumulative') : 'cumulative';
 
   /* ─── load settings (A7) ─── */
   useEffect(() => {
@@ -250,6 +269,8 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
     ]);
     setTasks(taskList);
     setGroups(groupList);
+    // 全量每日记录（不限日期范围），供任务总进度汇总使用
+    getDailyRecordsForPlan(planId, '2000-01-01', '2100-01-01').then(setAllDailyRecords);
     const durMap: Record<string, number> = {};
     for (const t of taskList) {
       durMap[t.id] = await getTotalDurationByTask(t.id);
@@ -359,9 +380,9 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
     await addTask({
       id: uuid(), planId, groupId,
       name: newTaskName.trim(), targetCount: Math.max(1, newTaskTarget || 1),
-      completedCount: 0, sortOrder: tasks.length, createdAt: new Date().toISOString(),
+      completedCount: 0, progressMode: newTaskMode, sortOrder: tasks.length, createdAt: new Date().toISOString(),
     });
-    setNewTaskName(''); setNewTaskTarget(0); setNewTaskGroupText('');
+    setNewTaskName(''); setNewTaskTarget(0); setNewTaskGroupText(''); setNewTaskMode('cumulative');
     showToast({ text: `任务已添加`, type: 'success' });
     setShowAddPanel(false);
     loadData();
@@ -425,6 +446,11 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
       if (idx >= 0) { const n = [...prev]; n[idx] = saved; return n; }
       return [...prev, saved];
     });
+    setAllDailyRecords((prev) => {
+      const idx = prev.findIndex((r) => r.taskId === saved.taskId && r.date === saved.date);
+      if (idx >= 0) { const n = [...prev]; n[idx] = saved; return n; }
+      return [...prev, saved];
+    });
     setCellPopup(null);
   };
 
@@ -438,6 +464,7 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
       ...original,
       name: editTask.name.trim(),
       targetCount: Math.max(1, editTask.targetCount || 1),
+      progressMode: editTask.progressMode ?? 'cumulative',
       groupId,
     });
     showToast({ text: `任务已更新`, type: 'success' });
@@ -447,7 +474,7 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
 
   const openEdit = (task: Task) => {
     if (suppressClickRef.current) { suppressClickRef.current = false; return; }
-    setEditTask({ id: task.id, name: task.name, targetCount: task.targetCount, groupId: task.groupId });
+    setEditTask({ id: task.id, name: task.name, targetCount: task.targetCount, groupId: task.groupId, progressMode: task.progressMode ?? 'cumulative' });
     setEditTaskGroupText(groups.find((g) => g.id === task.groupId)?.name ?? '');
   };
 
@@ -877,6 +904,18 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
               </datalist>
             </div>
           </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-gray-400">进度方式</label>
+            <div className="flex rounded-xl overflow-hidden border border-gray-200">
+              <button type="button" onClick={() => setNewTaskMode('cumulative')}
+                className={`flex-1 min-h-[44px] text-sm ${newTaskMode === 'cumulative' ? 'bg-blue-600 text-white font-semibold' : 'bg-gray-50 text-gray-600'}`}>累加（打卡/练习）</button>
+              <button type="button" onClick={() => setNewTaskMode('absolute')}
+                className={`flex-1 min-h-[44px] text-sm ${newTaskMode === 'absolute' ? 'bg-blue-600 text-white font-semibold' : 'bg-gray-50 text-gray-600'}`}>位置（看到第几）</button>
+            </div>
+            <p className="text-[11px] text-gray-400 mt-0.5">
+              {newTaskMode === 'absolute' ? '每天填「当前到达的位置」，进度取最远到达值' : '每天填「今日完成量」，进度累加求和'}
+            </p>
+          </div>
           <div className="flex gap-3 pt-2">
             <button onClick={() => setShowAddPanel(false)}
               className="flex-1 min-h-[48px] rounded-xl bg-gray-100 text-gray-600 text-sm font-semibold active:bg-gray-200 transition-colors">取消</button>
@@ -907,8 +946,10 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
                 <input type="number" min={0} value={cellPopup.completedCount}
                   onChange={(e) => setCellPopup((prev) => prev ? { ...prev, completedCount: Math.max(0, Number(e.target.value)) } : null)}
                   className="w-20 text-center text-2xl font-bold text-gray-900 bg-transparent border-b-2 border-blue-500 outline-none mx-auto"
-                  inputMode="numeric" aria-label="已完成次数" />
-                <div className="text-[11px] text-gray-400 mt-1">已完成</div>
+                  inputMode="numeric" aria-label={popupMode === 'absolute' ? '当前位置' : '今日完成量'} />
+                <div className="text-[11px] text-gray-400 mt-1">
+                  {popupMode === 'absolute' ? '当前位置（看到第几）' : '今日完成'}
+                </div>
               </div>
               <button onClick={() => setCellPopup((prev) => prev ? { ...prev, completedCount: prev.completedCount + 1 } : null)}
                 className="w-11 h-11 flex items-center justify-center rounded-xl bg-gray-100 text-gray-600 text-lg font-semibold active:bg-gray-200 transition-colors" aria-label="增加">+</button>
@@ -989,6 +1030,18 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
                   {groups.map((g) => <option key={g.id} value={g.name} />)}
                 </datalist>
               </div>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-gray-400">进度方式</label>
+              <div className="flex rounded-xl overflow-hidden border border-gray-200">
+                <button type="button" onClick={() => setEditTask((prev) => prev ? { ...prev, progressMode: 'cumulative' } : null)}
+                  className={`flex-1 min-h-[44px] text-sm ${editTask.progressMode !== 'absolute' ? 'bg-blue-600 text-white font-semibold' : 'bg-gray-50 text-gray-600'}`}>累加（打卡/练习）</button>
+                <button type="button" onClick={() => setEditTask((prev) => prev ? { ...prev, progressMode: 'absolute' } : null)}
+                  className={`flex-1 min-h-[44px] text-sm ${editTask.progressMode === 'absolute' ? 'bg-blue-600 text-white font-semibold' : 'bg-gray-50 text-gray-600'}`}>位置（看到第几）</button>
+              </div>
+              <p className="text-[11px] text-gray-400 mt-0.5">
+                {editTask.progressMode === 'absolute' ? '每天填「当前到达的位置」，进度取最远到达值' : '每天填「今日完成量」，进度累加求和'}
+              </p>
             </div>
             <div className="flex gap-3 pt-2">
               <button onClick={() => setEditTask(null)}

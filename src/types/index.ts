@@ -24,6 +24,8 @@ export interface Task {
   name: string;
   targetCount: number;
   completedCount: number;
+  /** 进度汇总方式：cumulative=每日增量求和（打卡/练习）；absolute=取最远到达值（看书/看剧到第几） */
+  progressMode?: 'cumulative' | 'absolute';
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
