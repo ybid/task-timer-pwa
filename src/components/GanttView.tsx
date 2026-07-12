@@ -24,6 +24,7 @@ import {
 import { performSync, isOnline, logout } from '../sync/client';
 import { SyncAuthModal } from './SyncAuthModal';
 import { HaoxueModule } from '../haoxue';
+import { usePullToRefresh } from './PullToRefresh';
 
 interface GanttViewProps {
   planId: string;
@@ -571,6 +572,9 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
     loadData();
   };
 
+  // 下拉刷新：在甘特表顶部下拉触发云同步
+  const ptr = usePullToRefresh({ onRefresh: handleSync, enabled: !!username });
+
   const handleLogout = async () => {
     await logout();
     setUsername(null);
@@ -743,12 +747,13 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
 
       {/* ─── Table ─── */}
       <div className="flex-1 overflow-hidden relative">
+        {ptr.indicator}
         {dateError && (
           <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 px-4 py-2 rounded-xl bg-red-50 text-red-600 text-sm shadow">
             {dateError}
           </div>
         )}
-        <div className="h-full overflow-x-auto overflow-y-auto hide-scrollbar cursor-grab active:cursor-grabbing select-none">
+        <div ref={ptr.ref} className="h-full overflow-x-auto overflow-y-auto hide-scrollbar cursor-grab active:cursor-grabbing select-none">
           <table className="w-full border-collapse" style={{ minWidth: dateList.length * 56 + taskColWidth + 56 }}>
             <thead>
               <tr>
