@@ -4,7 +4,7 @@ import {
   getGroupsByPlan, addGroup,
   getDailyRecordsForPlan, upsertDailyRecord, deleteDailyRecord,
   generateDateList, formatDate,
-  getTotalDurationByTask, getTimeRecordsByTask,
+  getTotalDurationByTask, getTimeRecordsByTask, getTimeRecordsForPlan,
   addPlan, deletePlan,
   getSettings, saveSettings, getTimerDraft, clearTimerDraft,
 } from '../db';
@@ -147,6 +147,8 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
   const [dailyRecords, setDailyRecords] = useState<DailyRecord[]>([]);
   /** 全量每日记录（不限日期范围），用于任务总进度汇总（位置型取最远到达、累加型求和都需全量） */
   const [allDailyRecords, setAllDailyRecords] = useState<DailyRecord[]>([]);
+  /** 全量时间记录（按计划），用于统计行按日期聚合「用时」 */
+  const [allTimeRecords, setAllTimeRecords] = useState<TimeRecord[]>([]);
   const [datePreset, setDatePreset] = useState<DateRangePreset>(7);
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
@@ -231,6 +233,32 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
   const popupMode: 'cumulative' | 'absolute' =
     cellPopup ? (tasks.find((t) => t.id === cellPopup.taskId)?.progressMode ?? 'cumulative') : 'cumulative';
 
+  /* 统计行：每个日期「完成的任务数」与「用时（分钟）」 */
+  const statsByDate = useMemo(() => {
+    const m = new Map<string, { count: number; minutes: number }>();
+    for (const d of dateList) m.set(d, { count: 0, minutes: 0 });
+    for (const d of dateList) {
+      // 完成量：当天有 completedCount>0 记录的不同任务数
+      const done = new Set(
+        allDailyRecords.filter((r) => r.date === d && r.completedCount > 0).map((r) => r.taskId),
+      );
+      // 用时：当天时间记录 duration（秒）累加 / 60 → 分钟
+      const minutes = allTimeRecords
+        .filter((r) => r.date === d)
+        .reduce((s, r) => s + r.duration, 0) / 60;
+      m.set(d, { count: done.size, minutes: Math.round(minutes) });
+    }
+    return m;
+  }, [allDailyRecords, allTimeRecords, dateList]);
+
+  const fmtMinutes = (min: number): string => {
+    if (min <= 0) return '—';
+    if (min < 60) return `${min}分`;
+    const h = Math.floor(min / 60);
+    const m = min % 60;
+    return m > 0 ? `${h}h${m}m` : `${h}h`;
+  };
+
   /* ─── load settings (A7) ─── */
   useEffect(() => {
     (async () => {
@@ -267,10 +295,14 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
     const [taskList, groupList] = await Promise.all([
       getTasksByPlan(planId), getGroupsByPlan(planId),
     ]);
+    // 按 sortOrder 排序，使拖动排序的持久化结果能在界面上正确反映
+    taskList.sort((a, b) => a.sortOrder - b.sortOrder);
     setTasks(taskList);
     setGroups(groupList);
     // 全量每日记录（不限日期范围），供任务总进度汇总使用
     getDailyRecordsForPlan(planId, '2000-01-01', '2100-01-01').then(setAllDailyRecords);
+    // 全量时间记录（按计划），供统计行按日期聚合「用时」
+    getTimeRecordsForPlan(planId).then(setAllTimeRecords);
     const durMap: Record<string, number> = {};
     for (const t of taskList) {
       durMap[t.id] = await getTotalDurationByTask(t.id);
@@ -581,12 +613,29 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
   const onDragEnd = async (e: DragEndEvent) => {
     const { active, over } = e;
     if (!over || active.id === over.id) return;
-    const oldIndex = tasks.findIndex((t) => t.id === active.id);
-    const newIndex = tasks.findIndex((t) => t.id === over.id);
-    if (oldIndex < 0 || newIndex < 0) return;
-    const reordered = arrayMove(tasks, oldIndex, newIndex);
-    for (let i = 0; i < reordered.length; i++) {
-      if (reordered[i].sortOrder !== i) await updateTask({ ...reordered[i], sortOrder: i });
+    const activeTask = tasks.find((t) => t.id === active.id);
+    const overTask = tasks.find((t) => t.id === over.id);
+    if (!activeTask || !overTask) return;
+    // 仅在「同类（同 groupId）」内允许拖动排序，跨分组忽略
+    if ((activeTask.groupId ?? null) !== (overTask.groupId ?? null)) {
+      showToast({ text: '只能在同一个分组内拖动排序', type: 'info' });
+      return;
+    }
+    // 按当前分组顺序重建完整列表，仅在该组内移动 active 到 over 位置
+    const newOrder: Task[] = [];
+    for (const { group, tasks: gTasks } of groupedTasks) {
+      const gid = group?.id ?? null;
+      let list = [...gTasks];
+      if (gid === (activeTask.groupId ?? null)) {
+        const oldI = list.findIndex((t) => t.id === active.id);
+        const newI = list.findIndex((t) => t.id === over.id);
+        if (oldI >= 0 && newI >= 0) list = arrayMove(list, oldI, newI);
+      }
+      newOrder.push(...list);
+    }
+    // 重新分配全局 sortOrder（保持分组间相对顺序）
+    for (let i = 0; i < newOrder.length; i++) {
+      if (newOrder[i].sortOrder !== i) await updateTask({ ...newOrder[i], sortOrder: i });
     }
     loadData();
     showToast({ text: '任务顺序已更新', type: 'success' });
@@ -601,7 +650,6 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
     if (gTasks.length > 0) groupedTasks.push({ group: g, tasks: gTasks });
   }
 
-  const flatIds = useMemo(() => groupedTasks.flatMap(({ tasks: ts }) => ts.map((t) => t.id)), [groupedTasks]);
 
   /* ─── sync (B5) ─── */
   const handleSync = async () => {
@@ -833,25 +881,26 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
             </thead>
             <tbody>
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-                <SortableContext items={flatIds} strategy={verticalListSortingStrategy}>
-                  {groupedTasks.map(({ group, tasks: gTasks }) => (
-                    <React.Fragment key={group?.id ?? '__ungrouped'}>
-                      {group && (
-                        <tr>
-                          <td colSpan={dateList.length + 2}
-                            className="sticky left-0 z-[3] bg-indigo-50/80 px-3 py-2 text-xs font-semibold text-indigo-700 border-b border-indigo-100 backdrop-blur-sm flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg>
-                              <span>{group.name}</span>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                      {!group && gTasks.length > 0 && (
-                        <tr>
-                          <td colSpan={dateList.length + 2} className="sticky left-0 z-[3] bg-gray-50/80 px-3 py-1.5 text-[11px] text-gray-400 border-b border-gray-200">未分组</td>
-                        </tr>
-                      )}
+                {groupedTasks.map(({ group, tasks: gTasks }) => (
+                  <React.Fragment key={group?.id ?? '__ungrouped'}>
+                    {group && (
+                      <tr>
+                        <td colSpan={dateList.length + 2}
+                          className="sticky left-0 z-[3] bg-indigo-50/80 px-3 py-2 text-xs font-semibold text-indigo-700 border-b border-indigo-100 backdrop-blur-sm flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg>
+                            <span>{group.name}</span>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    {!group && gTasks.length > 0 && (
+                      <tr>
+                        <td colSpan={dateList.length + 2} className="sticky left-0 z-[3] bg-gray-50/80 px-3 py-1.5 text-[11px] text-gray-400 border-b border-gray-200">未分组</td>
+                      </tr>
+                    )}
+                    {/* 每个分组独立 SortableContext：仅允许同分组内拖动排序 */}
+                    <SortableContext items={gTasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
                       {gTasks.map((task) => (
                         <SortableTaskRow
                           key={task.id}
@@ -872,10 +921,38 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
                           cellStyle={cellStyle}
                         />
                       ))}
-                    </React.Fragment>
-                  ))}
-                </SortableContext>
+                    </SortableContext>
+                  </React.Fragment>
+                ))}
               </DndContext>
+
+              {/* 统计行：每天完成的任务数 + 用时（置底常驻，样式与普通任务行完全一致） */}
+              {groupedTasks.length > 0 && (
+                <tr className="sticky bottom-0 z-[3] border-t border-gray-100/80">
+                  <td className="sticky left-0 z-[3] bg-white px-3 py-1.5 border-r border-gray-100"
+                    style={colWidthStyle}>
+                    <span className="text-sm font-medium text-gray-800">统计</span>
+                  </td>
+                  <td className="sticky z-[3] bg-white px-2 py-1.5 text-center border-r border-gray-100"
+                    style={cellStyle}>
+                    <span className="text-xs font-mono font-semibold text-gray-400">—</span>
+                  </td>
+                  {dateList.map((d) => {
+                    const s = statsByDate.get(d);
+                    const { isToday } = formatDateHeader(d);
+                    return (
+                      <td key={d}
+                        className={`text-center px-1 py-1.5 transition-all min-w-[56px] min-h-[36px] ${isToday ? 'ring-1 ring-inset ring-blue-200' : ''}`}>
+                        <div className="w-full min-h-[30px] flex flex-col items-center justify-center rounded-lg transition-colors">
+                          <span className="text-xs font-mono text-gray-800 font-medium tabular-nums">{s ? s.count : 0}</span>
+                          <span className="text-[10px] text-gray-400">{s ? fmtMinutes(s.minutes) : '-'}</span>
+                        </div>
+                      </td>
+                    );
+                  })}
+                </tr>
+              )}
+
               {groupedTasks.length === 0 && (
                 <tr>
                   <td colSpan={dateList.length + 2} className="text-center py-16 text-gray-400 text-sm">
@@ -889,7 +966,7 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
       </div>
 
       {/* ─── Bottom hint bar ─── */}
-      <div className="flex-shrink-0 bg-white/95 backdrop-blur-md border-t border-gray-200/80 px-4 py-2 flex items-center justify-center z-20"
+      <div className="flex-shrink-0 bg-white/95 backdrop-blur-md border-t border-gray-100/80 px-4 py-2 flex items-center justify-center z-20"
         style={{ paddingBottom: 'calc(8px + var(--safe-bottom))' }}>
         <span className="text-xs text-gray-400 px-3 py-1.5 bg-gray-100 rounded-lg">点击日期格记录进度，点击右上角 + 添加任务</span>
       </div>

@@ -353,6 +353,20 @@ export async function getTimeRecordsByDate(date: string): Promise<TimeRecord[]> 
   return alive(await db.getAllFromIndex('timeRecords', 'by-date', date));
 }
 
+/** All time records of a plan's tasks (used for per-date time aggregation). */
+export async function getTimeRecordsForPlan(planId: string): Promise<TimeRecord[]> {
+  const tasks = await getTasksByPlan(planId);
+  const taskIds = tasks.map((t) => t.id);
+  if (taskIds.length === 0) return [];
+  const db = await getDB();
+  const results: TimeRecord[] = [];
+  for (const taskId of taskIds) {
+    const records = await db.getAllFromIndex('timeRecords', 'by-task', taskId);
+    for (const r of records) if (!r.deletedAt) results.push(r);
+  }
+  return results;
+}
+
 export async function getTotalDurationByTask(taskId: string): Promise<number> {
   const records = await getTimeRecordsByTask(taskId);
   return records.reduce((sum, r) => sum + r.duration, 0);

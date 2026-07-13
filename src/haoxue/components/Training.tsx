@@ -241,23 +241,7 @@ export function Training({ levelId, entities, update, onExit }: Props) {
           </div>
         )}
 
-        {/* 反馈 */}
-        {feedback && (
-          <div
-            className={`text-lg font-semibold ${
-              feedback === 'correct' ? 'text-green-600' : 'text-red-600'
-            }`}
-          >
-            {feedback === 'correct' ? '✓ 答对啦！' : feedback === 'timeout' ? '⏰ 超时了' : '✗ 再想想'}
-            {q && feedback !== 'correct' && (
-              <span className="ml-2 text-gray-400">
-                {formatExprForDisplay(q.question.expr)} = {q.question.answer}
-              </span>
-            )}
-          </div>
-        )}
-
-        {/* 选项 */}
+        {/* 选项（仅通过颜色变化反馈对错，不展示成功/失败文字提示，避免页面晃动） */}
         <div className="grid grid-cols-2 gap-4 w-full max-w-sm">
           {q?.options.map((opt, i) => {
             const isCorrectOpt = q.question.answer === opt;
@@ -281,9 +265,9 @@ export function Training({ levelId, entities, update, onExit }: Props) {
 
       {/* 成就解锁提示 */}
       {toast && (
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-yellow-500 text-white text-sm font-semibold shadow-lg animate-bounce">
-          {toast}
-        </div>
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-yellow-500 text-white text-sm font-semibold shadow-lg animate-fade-in">
+            {toast}
+          </div>
       )}
     </div>
   );
