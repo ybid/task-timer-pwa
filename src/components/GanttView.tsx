@@ -153,6 +153,8 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
   const [dateList, setDateList] = useState<string[]>([]);
+  /** 滑动窗口偏移：相对今天的天数；默认 -1 = 从昨天起，与历史行为一致。向左滑(更早)=减小，向右滑(更晚)=增大 */
+  const [viewStartOffset, setViewStartOffset] = useState(-1);
   const [dateError, setDateError] = useState<string | null>(null);
   const [showCustom, setShowCustom] = useState(false);
 
@@ -349,16 +351,23 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
       from = customFrom; to = customTo;
     } else {
       const base = new Date();
-      base.setDate(base.getDate() - 1);
       const fromDate = new Date(base);
-      const toDate = new Date(base);
-      toDate.setDate(base.getDate() + (datePreset as number) - 1);
+      fromDate.setDate(base.getDate() + viewStartOffset);
+      const toDate = new Date(fromDate);
+      toDate.setDate(fromDate.getDate() + (datePreset as number) - 1);
       from = formatDate(fromDate); to = formatDate(toDate);
     }
     setDateError(null);
     setDateList(generateDateList(from, to));
     getDailyRecordsForPlan(planId, from, to).then(setDailyRecords);
-  }, [planId, datePreset, customFrom, customTo]);
+  }, [planId, datePreset, customFrom, customTo, viewStartOffset]);
+
+  /* ─── date window sliding (左/右滑看更前/更后) ─── */
+  const shiftWindow = (dir: -1 | 1) => {
+    const step = typeof datePreset === 'number' ? datePreset : 7;
+    setViewStartOffset((o) => o + dir * step);
+  };
+  const backToToday = () => setViewStartOffset(-1);
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -791,7 +800,7 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
           {([7, 30, 'custom'] as const).map((p) => {
             const isActive = datePreset === p;
             return (
-              <button key={String(p)} onClick={() => { setDatePreset(p); setShowCustom(p === 'custom'); }}
+              <button key={String(p)} onClick={() => { setDatePreset(p); setShowCustom(p === 'custom'); setViewStartOffset(-1); }}
                 className={`px-4 py-1.5 rounded-[10px] text-sm font-medium transition-all touch-manipulation ${
                   isActive ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500'
                 }`}>
@@ -807,6 +816,27 @@ export const GanttView: React.FC<GanttViewProps> = ({ planId, plans, onSwitchPla
             <span className="text-gray-300">–</span>
             <input type="date" value={customTo} onChange={(e) => { setCustomTo(e.target.value); setDatePreset('custom'); }}
               className="px-2 py-1.5 border border-gray-200 rounded-lg text-sm bg-white" aria-label="结束日期" />
+          </div>
+        )}
+        {typeof datePreset === 'number' && (
+          <div className="flex items-center gap-1 flex-shrink-0">
+            <button onClick={() => shiftWindow(-1)}
+              className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-xl text-gray-400 hover:bg-gray-100 active:bg-gray-200 transition-colors"
+              aria-label="更早" title="更早">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+            </button>
+            {viewStartOffset !== -1 && (
+              <button onClick={backToToday}
+                className="min-h-[36px] px-3 rounded-xl text-xs font-medium text-gray-500 hover:bg-gray-100 active:bg-gray-200 transition-colors"
+                aria-label="回到今天" title="回到今天">
+                今天
+              </button>
+            )}
+            <button onClick={() => shiftWindow(1)}
+              className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-xl text-gray-400 hover:bg-gray-100 active:bg-gray-200 transition-colors"
+              aria-label="更晚" title="更晚">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
+            </button>
           </div>
         )}
         <div className="flex items-center gap-2 flex-shrink-0 ml-auto pl-2">
